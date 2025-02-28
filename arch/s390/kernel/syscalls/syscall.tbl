@@ -470,3 +470,5 @@
 465  common	listxattrat		sys_listxattrat			sys_listxattrat
 466  common	removexattrat		sys_removexattrat		sys_removexattrat
 467  common	open_tree_attr		sys_open_tree_attr		sys_open_tree_attr
+468  common	gate_wait		sys_gate_wait			sys_gate_wait
+469  common	gate_wake		sys_gate_wake			sys_gate_wake

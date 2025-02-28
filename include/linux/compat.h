@@ -939,6 +939,13 @@ int kcompat_sys_fstatfs64(unsigned int fd, compat_size_t sz,
 static inline bool in_compat_syscall(void) { return is_compat_task(); }
 #endif
 
+/*
+ * For most but not all architectures,
+ * "am I in a syscall environment with 32-bit arguments?" and
+ * "am I in a compat syscall?" are the same question.
+ * For architectures on which they aren't the same question,
+ * arch code can override in_32bit_reg_syscall.
+ */
 #ifndef in_32bit_reg_syscall
 static inline bool in_32bit_reg_syscall(void) { return in_compat_syscall(); }
 #endif
@@ -951,7 +958,7 @@ static inline bool in_32bit_reg_syscall(void) { return in_compat_syscall(); }
 static inline bool in_compat_syscall(void) { return false; }
 /* Ensure no one redefines in_32bit_reg_syscall() under !CONFIG_COMPAT */
 #define in_32bit_reg_syscall in_32bit_reg_syscall
-static inline bool in_32bit_reg_syscall(void) { return !IS_ENABLED(CONFIG_64BIT); }
+static inline bool in_32bit_reg_syscall(void) { return BITS_PER_LONG == 32; }
 
 #endif /* CONFIG_COMPAT */
 

@@ -852,8 +852,13 @@ __SYSCALL(__NR_removexattrat, sys_removexattrat)
 #define __NR_open_tree_attr 467
 __SYSCALL(__NR_open_tree_attr, sys_open_tree_attr)
 
+#define __NR_gate_wait 468
+__SYSCALL(__NR_gate_wait, sys_gate_wait)
+#define __NR_gate_wake 469
+__SYSCALL(__NR_gate_wake, sys_gate_wake)
+
 #undef __NR_syscalls
-#define __NR_syscalls 468
+#define __NR_syscalls 470
 
 /*
  * 32 bit systems traditionally used different

@@ -172,6 +172,8 @@ COND_SYSCALL_COMPAT(fadvise64_64);
 COND_SYSCALL(lsm_get_self_attr);
 COND_SYSCALL(lsm_set_self_attr);
 COND_SYSCALL(lsm_list_modules);
+COND_SYSCALL(gate_wait);
+COND_SYSCALL(gate_wake);
 
 /* CONFIG_MMU only */
 COND_SYSCALL(swapon);

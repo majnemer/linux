@@ -53,6 +53,15 @@ struct restart_block {
 			unsigned long tv_sec;
 			unsigned long tv_nsec;
 		} poll;
+		/* For gate_wait */
+		struct {
+			void __user *uaddr;
+			unsigned long mask;
+			unsigned long expected;
+			ktime_t abs_deadline;
+			u8 monotonic : 1;
+			u8 size      : 4;
+		} gate;
 	};
 };
 
