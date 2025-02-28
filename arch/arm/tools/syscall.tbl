@@ -481,3 +481,5 @@
 464	common	getxattrat			sys_getxattrat
 465	common	listxattrat			sys_listxattrat
 466	common	removexattrat			sys_removexattrat
+467	common	gate_wake			sys_gate_wake
+468	common	gate_wait			sys_gate_wait

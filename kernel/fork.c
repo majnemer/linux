@@ -2438,6 +2438,9 @@ __latent_entropy struct task_struct *copy_process(
 	p->plug = NULL;
 #endif
 	futex_init_task(p);
+#ifdef CONFIG_GATE
+	p->gate_uaddr = NULL;
+#endif
 
 	/*
 	 * sigaltstack should be cleared when sharing the same VM

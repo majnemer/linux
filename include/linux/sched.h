@@ -1376,6 +1376,10 @@ struct task_struct {
 	unsigned long rseq_event_mask;
 #endif
 
+#ifdef CONFIG_GATE
+	void __user			*gate_uaddr;
+#endif
+
 #ifdef CONFIG_SCHED_MM_CID
 	int				mm_cid;		/* Current cid in mm */
 	int				last_mm_cid;	/* Most recent cid in mm */

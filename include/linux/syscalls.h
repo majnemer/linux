@@ -581,6 +581,14 @@ asmlinkage long sys_futex_wait(void __user *uaddr, unsigned long val, unsigned l
 asmlinkage long sys_futex_requeue(struct futex_waitv __user *waiters,
 				  unsigned int flags, int nr_wake, int nr_requeue);
 
+asmlinkage long sys_gate_wait(void __user *uaddr, unsigned long mask,
+			      unsigned long expected, unsigned int flags,
+			      struct __kernel_timespec __user *ts,
+			      clockid_t clockid);
+
+asmlinkage long sys_gate_wake(pid_t pid, void __user *uaddr,
+			      unsigned int flags);
+
 asmlinkage long sys_nanosleep(struct __kernel_timespec __user *rqtp,
 			      struct __kernel_timespec __user *rmtp);
 asmlinkage long sys_nanosleep_time32(struct old_timespec32 __user *rqtp,

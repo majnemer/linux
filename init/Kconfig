@@ -1670,6 +1670,13 @@ config FUTEX_PI
 	depends on FUTEX && RT_MUTEXES
 	default y
 
+config GATE
+	bool "Enable gate support" if EXPERT
+	default N
+	help
+	  Disabling this option will cause the kernel to be built without
+	  support for the gate family of system calls.
+
 config EPOLL
 	bool "Enable eventpoll support" if EXPERT
 	default y
