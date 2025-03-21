@@ -296,6 +296,7 @@ out:
 		 */
 		restart = &current->restart_block;
 		restart->gate.uaddr = uaddr;
+		restart->gate.mask = mask;
 		restart->gate.expected = expected;
 		restart->gate.abs_deadline = abs_deadline;
 		restart->gate.monotonic = clockid == CLOCK_MONOTONIC;
