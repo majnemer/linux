@@ -69,7 +69,7 @@ static void gate_wait(_Atomic uint8_t *gatep)
 		/* gate is not available; wait. */
 
 		s = sys_gate_wait(gatep, (__kernel_ulong_t)-1, expected,
-				  GATE_WAIT_SIZE_U8, NULL, CLOCK_REALTIME);
+				  sizeof(*gatep), NULL, (size_t)0);
 		if (s == -1 && errno != EAGAIN)
 			err(EXIT_FAILURE, "gate_wait");
 	}
@@ -93,7 +93,7 @@ static void gate_post(pid_t pid, _Atomic uint8_t *gatep)
 	 */
 
 	if (atomic_compare_exchange_strong(gatep, &expected, desired)) {
-		s = sys_gate_wake(pid, gatep, 0);
+		s = sys_gate_wake(pid, gatep, NULL, (size_t)0);
 		if (s == -1 && errno != EAGAIN)
 			err(EXIT_FAILURE, "gate_wake");
 	}

@@ -3,6 +3,7 @@
 #ifndef __GATE_SYS__
 #define __GATE_SYS__
 
+#include <linux/gate.h>
 #include <linux/time_types.h>
 #include <linux/unistd.h>
 #include <sys/syscall.h>
@@ -10,17 +11,19 @@
 #include <unistd.h>
 
 static inline long sys_gate_wait(void *uaddr, __kernel_ulong_t mask,
-				 __kernel_ulong_t expected, unsigned int flags,
-				 const struct __kernel_timespec *ts,
-				 clockid_t clockid)
+				 __kernel_ulong_t expected, size_t usize,
+				 const struct gate_wait_options *options,
+				 size_t options_size)
 {
-	return syscall(__NR_gate_wait, uaddr, mask, expected, flags, ts,
-		       clockid);
+	return syscall(__NR_gate_wait, uaddr, mask, expected, usize, options,
+		       options_size);
 }
 
-static inline long sys_gate_wake(pid_t pid, void *uaddr, unsigned int flags)
+static inline long sys_gate_wake(pid_t pid, void *uaddr,
+				 const struct gate_wake_options *options,
+				 size_t options_size)
 {
-	return syscall(__NR_gate_wake, pid, uaddr, flags);
+	return syscall(__NR_gate_wake, pid, uaddr, options, options_size);
 }
 
 #endif

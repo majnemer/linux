@@ -87,16 +87,10 @@
  */
 
 /**
- * define GATE_WAIT_SIZE_MASK - bitmask to extract various GATE_WAIT_SIZE_U*
- * values.
- */
-#define GATE_WAIT_SIZE_MASK 0x003
-/**
  * define GATE_WAIT_ALL_VALID_FLAGS - bitmask of all flags which gate_wait()
  * recognizes.
  */
-#define GATE_WAIT_ALL_VALID_FLAGS \
-	(GATE_WAIT_SIZE_MASK | GATE_WAIT_TIMER_ABSTIME)
+#define GATE_WAIT_ALL_VALID_FLAGS (GATE_WAIT_ABSTIME | GATE_WAIT_RELTIME)
 
 static long __sched gate_wait_restart(struct restart_block *restart);
 
@@ -146,21 +140,6 @@ static __always_inline long gate_wait_finish(struct task_struct *p,
 }
 
 /**
- * enum gate_wait_restart_mode - controls the restart behavior following signal
- *                               interruption.
- * @GATE_WAIT_RESTARTBLOCK: Return %-ERESTART_RESTARTBLOCK.
- * @GATE_WAIT_RESTARTSYS:   Return %-ERESTARTSYS.
- *
- * @GATE_WAIT_RESTARTBLOCK is used to support relative timeouts interrupted by
- * signals. @GATE_WAIT_RESTARTSYS is used for indefinite waits or absolute
- * deadlines.
- */
-enum gate_wait_restart_mode {
-	GATE_WAIT_RESTARTBLOCK,
-	GATE_WAIT_RESTARTSYS,
-};
-
-/**
  * get_user_value() - Safely read a value of specified size from user memory.
  * @uaddr:  User space address to read from
  * @size:   Size of value to read (1, 2, 4, or 8 bytes)
@@ -196,26 +175,19 @@ static inline long get_user_value(void __user *uaddr, size_t size,
  * @size:         Number of bytes to deference.
  * @expected:     Expected value at *@uaddr.
  * @sl:           Pointer to a %struct hrtimer_sleeper if a timeout was given.
- * @abs_deadline: Absolute deadline to use for canceling the wait.
- * @clockid:      Clock identifier (%CLOCK_REALTIME or %CLOCK_MONOTONIC).
- * @restart_mode: Used to handle signals for relative timeouts.
  *
  * Return:
- * * %-EAGAIN                - Comparison failed; wait not entered.
- * * %0                      - Blocked and then woken.
- * * %-ETIMEDOUT             - Timed out before being woken.
- * * %-EFAULT                - Faulted when accessing @uaddr.
- * * %-ERESTARTSYS           - Interrupted by a signal.
- * * %-ERESTART_RESTARTBLOCK - Interrupted by a signal (with relative timeout).
+ * * %-EAGAIN      - Comparison failed; wait not entered.
+ * * %0            - Blocked and then woken.
+ * * %-ETIMEDOUT   - Timed out before being woken.
+ * * %-EFAULT      - Faulted when accessing @uaddr.
+ * * %-ERESTARTSYS - Interrupted by a signal.
  */
 static long do_gate_wait(void __user *uaddr, size_t size, unsigned long mask,
-			 unsigned long expected, struct hrtimer_sleeper *sl,
-			 ktime_t abs_deadline, clockid_t clockid,
-			 enum gate_wait_restart_mode restart_mode)
+			 unsigned long expected, struct hrtimer_sleeper *sl)
 {
 	long ret;
 	unsigned long uval;
-	struct restart_block *restart;
 
 	/*
 	 * Start by immediately registering our intent to wait.
@@ -257,51 +229,38 @@ static long do_gate_wait(void __user *uaddr, size_t size, unsigned long mask,
 		 */
 		if (READ_ONCE(current->gate_uaddr) == NULL) {
 			ret = 0;
-			goto out;
+			break;
 		}
 
 		if (sl && !sl->task) {
 			ret = -ETIMEDOUT;
-			goto out;
+			break;
 		}
 
 		if (signal_pending(current)) {
 			ret = -ERESTARTSYS;
-			goto out;
+			break;
 		}
 
 		schedule();
 	}
+	__set_current_state(TASK_RUNNING);
 
 out:
-	__set_current_state(TASK_RUNNING);
 	if (ret != 0) {
 		/*
 		 * We gave up on waiting without being woken, clean up the wait
 		 * intent.
-		 *
-		 * Note that the waiter might race against a waker at the last
-		 * minute. If the waiter lost, we will return that we were woken
-		 * to be consistent with the result of sys_gate_wait().
 		 */
 		if (unlikely(!gate_wait_finish(current, uaddr) &&
-			     (ret == -ETIMEDOUT || ret == -ERESTARTSYS)))
+			     (ret == -ETIMEDOUT || ret == -ERESTARTSYS))) {
+			/*
+			 * It is possible for a sys_gate_wake() to race with
+			 * either the signal or timeout. In this case, we should
+			 * return that we were woken.
+			 */
 			ret = 0;
-	}
-	if (unlikely(sl && ret == -ERESTARTSYS &&
-		     restart_mode == GATE_WAIT_RESTARTBLOCK)) {
-		/*
-		 * A signal interrupted our timed wait, we need a restart block
-		 * to properly restart relative time wait system calls.
-		 */
-		restart = &current->restart_block;
-		restart->gate.uaddr = uaddr;
-		restart->gate.mask = mask;
-		restart->gate.expected = expected;
-		restart->gate.abs_deadline = abs_deadline;
-		restart->gate.monotonic = clockid == CLOCK_MONOTONIC;
-		restart->gate.size = size;
-		return set_restart_fn(restart, gate_wait_restart);
+		}
 	}
 	return ret;
 }
@@ -310,8 +269,6 @@ static __always_inline void gate_setup_timeout(struct hrtimer_sleeper *slp,
 					       ktime_t abs_deadline,
 					       clockid_t clockid)
 {
-	if (!slp)
-		return;
 	hrtimer_setup_sleeper_on_stack(slp, clockid, HRTIMER_MODE_ABS);
 	hrtimer_set_expires_range_ns(&slp->timer, abs_deadline,
 				     current->timer_slack_ns);
@@ -319,9 +276,6 @@ static __always_inline void gate_setup_timeout(struct hrtimer_sleeper *slp,
 
 static __always_inline void gate_destroy_timeout(struct hrtimer_sleeper *slp)
 {
-
-	if (!slp)
-		return;
 	hrtimer_cancel(&slp->timer);
 	destroy_hrtimer_on_stack(&slp->timer);
 }
@@ -332,22 +286,18 @@ static long __sched gate_wait_restart(struct restart_block *restart)
 	struct hrtimer_sleeper sl;
 	clockid_t clockid;
 
-	/*
-	 * Tentatively disarm the restart block in case we end up returning without
-	 * observing a signal. do_gate_wait() will re-arm the restart block for us
-	 * should the need arise.
-	 */
-	restart->fn = do_no_restart_syscall;
-
 	clockid = restart->gate.monotonic ? CLOCK_MONOTONIC : CLOCK_REALTIME;
 	gate_setup_timeout(&sl, restart->gate.abs_deadline, clockid);
 
 	ret = do_gate_wait(restart->gate.uaddr, restart->gate.size,
-			   restart->gate.mask, restart->gate.expected, &sl,
-			   restart->gate.abs_deadline, clockid,
-			   GATE_WAIT_RESTARTBLOCK);
+			   restart->gate.mask, restart->gate.expected, &sl);
 
 	gate_destroy_timeout(&sl);
+
+	if (unlikely(ret == -ERESTARTSYS))
+		return set_restart_fn(restart, gate_wait_restart);
+
+	restart->fn = do_no_restart_syscall;
 
 	return ret;
 }
@@ -355,105 +305,122 @@ static long __sched gate_wait_restart(struct restart_block *restart)
 /**
  * sys_gate_wait() - Atomically compare-and-block the current thread; unblock if
  * a wake, timeout, or signal occurs.
- * @uaddr:    User-space address on which the thread waits.
- * @mask:     Mask to extract only the bits that are of interest.
- * @expected: Expected value at *@uaddr.
- * @flags:    Flags controlling the interpretation of @ts.
- * @ts:       Pointer to a user-space &struct __kernel_timespec specifying the
- *            wait duration.
- * @clockid:  Clock identifier (%CLOCK_REALTIME or %CLOCK_MONOTONIC).
+ * @uaddr:          User-space address on which the thread waits.
+ * @mask:           Mask to extract only the bits that are of interest.
+ * @expected:       Expected value at *@uaddr.
+ * @usize:          Width of the user-space access in bytes.
+ * @uoptionsp:      Configuration options for the wait.
+ * @uoptions_usize: Size of the user-space configuration options.
  *
  * Return:
- * * %-EINVAL                - @clockid was not %CLOCK_REALTIME or
- *                             %CLOCK_MONOTONIC.
- * * %-EINVAL                - At least one of @flags or @ts is improper.
+ * * %-EINVAL                - @uoptionsp is improper.
+ * * %-E2BIG                 - @uoptions_usize is unreasonably large.
  * * %-EAGAIN                - Comparison failed; wait not entered.
  * * %0                      - Blocked and then woken.
  * * %-ETIMEDOUT             - Timed out before being woken.
- * * %-EFAULT                - Fault accessing @uaddr or @ts.
+ * * %-EFAULT                - Fault accessing @uaddr or @uoptionsp.
  * * %-ERESTARTSYS           - Interrupted by a signal.
  * * %-ERESTART_RESTARTBLOCK - Interrupted by a signal (with relative timeout).
  */
 SYSCALL_DEFINE6(gate_wait, void __user *, uaddr, unsigned long, mask,
-		unsigned long, expected, unsigned int, flags,
-		struct __kernel_timespec __user *, ts, clockid_t, clockid)
+		unsigned long, expected, size_t, usize,
+		struct gate_wait_options __user *, uoptionsp,
+		size_t, uoptions_usize)
 {
 	long ret;
-	ktime_t abs_deadline;
+	size_t max_size;
+	clockid_t clockid;
 	struct timespec64 kts;
-	size_t size, max_size;
-	enum gate_wait_restart_mode restart_mode;
-	struct hrtimer_sleeper sl, *slp = NULL;
-
-	if (unlikely(flags & ~GATE_WAIT_ALL_VALID_FLAGS)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	size = 1 << (flags & GATE_WAIT_SIZE_MASK);
+	struct restart_block *restart;
+	struct gate_wait_options options;
+	ktime_t abs_deadline;
+	struct hrtimer_sleeper sl;
+	bool is_rel_timeout = false, is_abs_timeout = false;
+	struct hrtimer_sleeper *slp = NULL;
 
 	if (in_32bit_reg_syscall())
 		max_size = sizeof(u32);
 	else
 		max_size = sizeof(u64);
 
-	if (unlikely(size > max_size)) {
+	if (unlikely(usize > max_size || !is_power_of_2(usize))) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (unlikely(!IS_ALIGNED((unsigned long)uaddr, size))) {
+	if (unlikely(!IS_ALIGNED((uintptr_t)uaddr, usize))) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	/* Copy ts from user-space */
-	if (ts) {
-		if (unlikely(clockid != CLOCK_MONOTONIC &&
-			     clockid != CLOCK_REALTIME)) {
+	if (uoptions_usize) {
+		if (unlikely(uoptions_usize > PAGE_SIZE)) {
+			ret = -E2BIG;
+			goto out;
+		}
+		ret = copy_struct_from_user(&options, sizeof(options),
+					    uoptionsp, uoptions_usize);
+		if (unlikely(ret < 0))
+			goto out;
+		if (unlikely(options.flags & ~GATE_WAIT_ALL_VALID_FLAGS)) {
 			ret = -EINVAL;
 			goto out;
 		}
-		ret = get_timespec64(&kts, ts);
-		if (unlikely(ret))
-			goto out;
-
-		if (unlikely(!timespec64_valid(&kts))) {
+		is_abs_timeout = options.flags & GATE_WAIT_ABSTIME;
+		is_rel_timeout = options.flags & GATE_WAIT_RELTIME;
+		if (unlikely(is_abs_timeout && is_rel_timeout)) {
 			ret = -EINVAL;
 			goto out;
 		}
+		if (is_abs_timeout || is_rel_timeout) {
+			clockid = options.clockid;
+			if (unlikely(clockid != CLOCK_MONOTONIC &&
+				     clockid != CLOCK_REALTIME)) {
+				ret = -EINVAL;
+				goto out;
+			}
+			kts.tv_sec = options.timeout.tv_sec;
+			kts.tv_nsec = options.timeout.tv_nsec;
+			if (unlikely(!timespec64_valid(&kts))) {
+				ret = -EINVAL;
+				goto out;
+			}
 
-		abs_deadline = timespec64_to_ktime(kts);
-
-		if (flags & GATE_WAIT_TIMER_ABSTIME) {
-			abs_deadline =
-				timens_ktime_to_host(clockid, abs_deadline);
-			restart_mode = GATE_WAIT_RESTARTSYS;
-		} else {
-			abs_deadline =
-				ktime_add_safe(ktime_get(), abs_deadline);
-			/*
-			 * Naively restarting the gate_wait when it has a
-			 * relative timeout would cause it to wait too much.
-			 *
-			 * We use the restart block functionality to turn the
-			 * relative timeout to an absolute deadline and source
-			 * our deadline from that block.
-			 */
-			restart_mode = GATE_WAIT_RESTARTBLOCK;
+			abs_deadline = timespec64_to_ktime(kts);
+			if (is_abs_timeout)
+				abs_deadline = timens_ktime_to_host(
+					clockid, abs_deadline);
+			else
+				abs_deadline = ktime_add_safe(ktime_get(),
+							      abs_deadline);
+			slp = &sl;
+			gate_setup_timeout(slp, abs_deadline, clockid);
 		}
-
-		slp = &sl;
-	} else {
-		abs_deadline = KTIME_MAX;
-		restart_mode = GATE_WAIT_RESTARTSYS;
 	}
-	gate_setup_timeout(slp, abs_deadline, clockid);
 
-	ret = do_gate_wait(uaddr, size, mask, expected, slp, abs_deadline,
-			   clockid, restart_mode);
+	ret = do_gate_wait(uaddr, usize, mask, expected, slp);
+
+	if (slp)
+		gate_destroy_timeout(slp);
+
+	/*
+	 * Naively restarting the sys_gate_wait() when it has a relative timeout
+	 * would cause it to wait too much.
+	 *
+	 * We use the restart block functionality to turn the relative timeout
+	 * to an absolute deadline and source our deadline from that block.
+	 */
+	if (unlikely(ret == -ERESTARTSYS && is_rel_timeout)) {
+		restart = &current->restart_block;
+		restart->gate.uaddr = uaddr;
+		restart->gate.mask = mask;
+		restart->gate.expected = expected;
+		restart->gate.abs_deadline = abs_deadline;
+		restart->gate.monotonic = clockid == CLOCK_MONOTONIC;
+		restart->gate.size = usize;
+		return set_restart_fn(restart, gate_wait_restart);
+	}
 out:
-	gate_destroy_timeout(slp);
 	return ret;
 }
 
@@ -482,40 +449,50 @@ static long do_gate_wake(struct task_struct *p, void __user *uaddr)
 	smp_mb__before_atomic();
 	ret = gate_wait_finish(p, uaddr);
 
-	/*
-	 * The waker cleared @p->gate_uaddr so it needs to wake up @p.
-	 * wake_up_process()'s return value depends on @p->state which may not
-	 * yet have transitioned to %TASK_INTERRUPTIBLE.
-	 */
 	if (ret > 0)
-		ret = wake_up_process(p);
+		wake_up_process(p);
 
 	return ret;
 }
 
 /**
  * sys_gate_wake() - Wake a process blocked in sys_gate_wait().
- * @pid:   The process identifier in question.
- * @uaddr: The address we expect the process to be associated with.
- * @flags: Must be 0.
+ * @pid:            The process identifier in question.
+ * @uaddr:          The address we expect the process to be associated with.
+ * @uoptionsp:      Configuration options for the wake.
+ * @uoptions_usize: Size of the user-space configuration options.
  *
  * Return:
  * * %1       - @pid was waiting on @uaddr.
  * * %0       - @pid was not waiting on any gate address.
  * * %-EAGAIN - @pid was waiting on a gate address but not @uaddr.
  * * %-EPERM  - @pid is a kernel thread (cannot be woken).
- * * %-EINVAL - @flags was not zero.
+ * * %-E2BIG  - @uoptions_usize is unreasonably large.
+ * * %-EINVAL - @uoptions_usize.flags was not zero.
  * * %-ESRCH  - @pid was not found.
  */
-SYSCALL_DEFINE3(gate_wake, pid_t, pid, void __user *, uaddr,
-		unsigned int, flags)
+SYSCALL_DEFINE4(gate_wake, pid_t, pid, void __user *, uaddr,
+		struct gate_wake_options __user *, uoptionsp,
+		size_t, uoptions_usize)
 {
 	long ret;
+	struct gate_wake_options options;
 	struct task_struct *p = NULL;
 
-	if (unlikely(flags != 0)) {
-		ret = -EINVAL;
-		goto out;
+	if (uoptions_usize) {
+		if (unlikely(uoptions_usize > PAGE_SIZE)) {
+			ret = -E2BIG;
+			goto out;
+		}
+		ret = copy_struct_from_user(&options, sizeof(options),
+					    uoptionsp, uoptions_usize);
+		if (unlikely(ret < 0))
+			goto out;
+
+		if (unlikely(options.flags != 0)) {
+			ret = -EINVAL;
+			goto out;
+		}
 	}
 
 	p = find_get_task_by_vpid(pid);
