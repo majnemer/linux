@@ -101,6 +101,13 @@ static inline bool in_compat_syscall(void)
 }
 #define in_compat_syscall in_compat_syscall	/* override the generic impl */
 #define compat_need_64bit_alignment_fixup in_ia32_syscall
+
+static inline bool in_32bit_reg_syscall(void)
+{
+	return !in_ia32_syscall();
+}
+/* override the generic impl */
+#define in_32bit_reg_syscall in_32bit_reg_syscall
 #endif
 
 struct compat_siginfo;

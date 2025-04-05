@@ -155,4 +155,10 @@ static inline int is_compat_task(void)
 	return test_thread_flag(TIF_32BIT_ADDR);
 }
 
+static inline bool in_32bit_reg_syscall(void)
+{
+	return test_thread_flag(TIF_32BIT_REGS);
+}
+#define in_32bit_reg_syscall in_32bit_reg_syscall
+
 #endif /* _ASM_COMPAT_H */

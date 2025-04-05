@@ -939,12 +939,19 @@ int kcompat_sys_fstatfs64(unsigned int fd, compat_size_t sz,
 static inline bool in_compat_syscall(void) { return is_compat_task(); }
 #endif
 
+#ifndef in_32bit_reg_syscall
+static inline bool in_32bit_reg_syscall(void) { return in_compat_syscall(); }
+#endif
+
 #else /* !CONFIG_COMPAT */
 
 #define is_compat_task() (0)
 /* Ensure no one redefines in_compat_syscall() under !CONFIG_COMPAT */
 #define in_compat_syscall in_compat_syscall
 static inline bool in_compat_syscall(void) { return false; }
+/* Ensure no one redefines in_32bit_reg_syscall() under !CONFIG_COMPAT */
+#define in_32bit_reg_syscall in_32bit_reg_syscall
+static inline bool in_32bit_reg_syscall(void) { return !IS_ENABLED(CONFIG_64BIT); }
 
 #endif /* CONFIG_COMPAT */
 
