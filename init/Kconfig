@@ -1701,7 +1701,7 @@ config FUTEX_PI
 
 config GATE
 	bool "Enable gate support" if EXPERT
-	default n
+	default y
 	help
 	  Disabling this option will cause the kernel to be built without
 	  support for the gate family of system calls.
